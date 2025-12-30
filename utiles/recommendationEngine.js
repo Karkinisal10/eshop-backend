@@ -250,11 +250,22 @@ class RecommendationEngine {
             return { product, similarity };
         });
 
-        return recommendations
+        // Primary: only positives
+        const positive = recommendations
             .filter(item => item.similarity > 0)
+            .sort((a, b) => b.similarity - a.similarity);
+
+        if (positive.length >= limit) {
+            return positive.slice(0, limit).map(item => item.product);
+        }
+
+        // Fallback: include zero-similarity items (excluding history) to avoid empty results on small catalogs
+        const nonHistory = recommendations
+            .filter(item => item.similarity >= 0)
             .sort((a, b) => b.similarity - a.similarity)
-            .slice(0, limit)
-            .map(item => item.product);
+            .slice(0, limit);
+
+        return nonHistory.map(item => item.product);
     }
 }
 

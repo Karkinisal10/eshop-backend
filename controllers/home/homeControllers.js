@@ -4,6 +4,7 @@ const reviewModel = require('../../models/reviewModel')
 const customerOrderModel = require('../../models/customerOrder')
 const authOrderModel = require('../../models/authOrder')
 const sellerModel = require('../../models/sellerModel')
+const browsingHistoryModel = require('../../models/browsingHistoryModel')
 const { responseReturn } = require("../../utiles/response")
 const queryProducts = require('../../utiles/queryProducts')
 const recommendationEngine = require('../../utiles/recommendationEngine')
@@ -57,13 +58,44 @@ class homeControllers{
             // Get all products for recommendation engine from active sellers only
             const allProducts = await productModel.find({ sellerId: { $in: activeSellerIds } })
             
-            // Feature: keep recommendation for featured
-            let featuredProducts = recommendationEngine.getRecommendedProducts(
-                allProducts,
-                'featured',
-                12
-            )
+            // Check if user is authenticated and has browsing history
+            // authMiddleware sets req.id; header-based tokens may set req.user
+            const customerId = req.user?.id || req.user?._id || req.id
+            let featuredProducts = []
+
+            if (customerId) {
+                // Get user's browsing history for personalized recommendations
+                const userHistory = await browsingHistoryModel.find({
+                    userId: new ObjectId(customerId)
+                }).sort({ viewedAt: -1 }).limit(20)
+
+                if (userHistory.length > 0) {
+                    // Get personalized recommendations based on browsing history
+                    featuredProducts = recommendationEngine.getPersonalizedRecommendations(
+                        userHistory,
+                        allProducts,
+                        12
+                    )
+                    console.log('[personalized] user', customerId?.toString?.() || customerId, 'history', userHistory.length, 'personalizedCount', featuredProducts?.length)
+                } else {
+                    console.log('[personalized] user', customerId?.toString?.() || customerId, 'history empty')
+                }
+            } else {
+                console.log('[personalized] no customerId')
+            }
+
+            // Fallback to static featured products if no personalized recommendations
             if (!featuredProducts || featuredProducts.length === 0) {
+                console.log('[personalized] fallback to static featured')
+                featuredProducts = recommendationEngine.getRecommendedProducts(
+                    allProducts,
+                    'featured',
+                    12
+                )
+            }
+            
+            if (!featuredProducts || featuredProducts.length === 0) {
+                console.log('[personalized] fallback to newest')
                 featuredProducts = [...allProducts].sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0,12)
             }
 
@@ -219,6 +251,34 @@ product_details = async (req, res) => {
         await productModel.findByIdAndUpdate(product._id, {
             $inc: { views: 1 }
         })
+
+        // Track product view for authenticated users (for personalized recommendations)
+        // authMiddleware sets req.id; header-based tokens may set req.user
+        const customerId = req.user?.id || req.user?._id || req.id
+        if (customerId) {
+            const existingRecord = await browsingHistoryModel.findOne({ 
+                userId: new ObjectId(customerId),
+                productId: new ObjectId(product._id)
+            })
+
+            if (existingRecord) {
+                // Update existing record with new timestamp
+                await browsingHistoryModel.findByIdAndUpdate(existingRecord._id, {
+                    viewedAt: new Date(),
+                    $inc: { timeSpent: 1 }
+                })
+            } else {
+                // Create new browsing history record
+                await browsingHistoryModel.create({
+                    userId: new ObjectId(customerId),
+                    productId: new ObjectId(product._id),
+                    category: product.category || '',
+                    brand: product.brand || '',
+                    price: product.price || 0,
+                    timeSpent: 1
+                })
+            }
+        }
 
         // Get all products for recommendation from active sellers only
         const allProducts = await productModel.find({ sellerId: { $in: activeSellerIds } })
@@ -557,6 +617,57 @@ can_review = async (req, res) => {
         responseReturn(res, 500, { canReview: false })
     }
 }
+// end method
+
+track_product_view = async (req, res) => {
+    const { productId } = req.body
+    // authMiddleware sets req.id; header-based tokens may set req.user
+    const customerId = req.user?.id || req.user?._id || req.id
+    
+    try {
+        // Only track for authenticated customers
+        if (!customerId || !productId) {
+            return responseReturn(res, 400, { message: 'Missing customerId or productId' })
+        }
+
+        // Get product details for caching
+        const product = await productModel.findById(productId)
+        if (!product) {
+            return responseReturn(res, 404, { message: 'Product not found' })
+        }
+
+        // Create or update browsing history record
+        const existingRecord = await browsingHistoryModel.findOne({ 
+            userId: new ObjectId(customerId),
+            productId: new ObjectId(productId)
+        })
+
+        if (existingRecord) {
+            // Update existing record with new timestamp
+            await browsingHistoryModel.findByIdAndUpdate(existingRecord._id, {
+                viewedAt: new Date(),
+                $inc: { timeSpent: 1 }  // Increment by 1 second (or unit)
+            })
+        } else {
+            // Create new browsing history record
+            await browsingHistoryModel.create({
+                userId: new ObjectId(customerId),
+                productId: new ObjectId(productId),
+                category: product.category || '',
+                brand: product.brand || '',
+                price: product.price || 0,
+                timeSpent: 1
+            })
+        }
+
+        responseReturn(res, 200, { message: 'Product view tracked' })
+
+    } catch (error) {
+        console.log('Error tracking product view:', error.message)
+        responseReturn(res, 500, { message: 'Error tracking view' })
+    }
+}
+// end method
 
 
 }
