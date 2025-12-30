@@ -10,8 +10,30 @@ const queryProducts = require('../../utiles/queryProducts')
 const recommendationEngine = require('../../utiles/recommendationEngine')
 const moment = require('moment')
 const { mongo: {ObjectId}} = require('mongoose')
+const jwt = require('jsonwebtoken')
 
 class homeControllers{
+
+    // Attempt to extract customerId from token without enforcing auth
+    getCustomerIdFromRequest = (req) => {
+        try {
+            // Check for customer ID in custom header (for testing)
+            const headerCustomerId = req.headers['x-customer-id']
+            if (headerCustomerId) return headerCustomerId
+            
+            const cookieToken = req.cookies?.customerToken || req.cookies?.accessToken
+            const headerAuth = req.headers?.authorization || req.headers?.Authorization
+            let token = cookieToken
+            if (!token && headerAuth && headerAuth.startsWith('Bearer ')) {
+                token = headerAuth.substring(7)
+            }
+            if (!token) return null
+            const decoded = jwt.verify(token, process.env.SECRET)
+            return decoded?.id || null
+        } catch (err) {
+            return null
+        }
+    }
 
     // Helper method to get active seller IDs
     getActiveSellerIds = async () => {
@@ -59,8 +81,11 @@ class homeControllers{
             const allProducts = await productModel.find({ sellerId: { $in: activeSellerIds } })
             
             // Check if user is authenticated and has browsing history
-            // authMiddleware sets req.id; header-based tokens may set req.user
-            const customerId = req.user?.id || req.user?._id || req.id
+            // Prefer middleware-provided ids; fallback to optional token decode
+            let customerId = req.user?.id || req.user?._id || req.id
+            if (!customerId) {
+                customerId = this.getCustomerIdFromRequest(req)
+            }
             let featuredProducts = []
 
             if (customerId) {
@@ -81,7 +106,7 @@ class homeControllers{
                     console.log('[personalized] user', customerId?.toString?.() || customerId, 'history empty')
                 }
             } else {
-                console.log('[personalized] no customerId')
+                console.log('[personalized] no customerId (public route)')
             }
 
             // Fallback to static featured products if no personalized recommendations
@@ -140,9 +165,9 @@ class homeControllers{
             const latestPool = [...allProducts].sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt))
             const latestProducts = takeWithFallback(latestPool, 9)
 
-            // Top Rated: highest rating
+            // Top Rated: highest rating (exclude products with 0 rating)
             const ratingPool = [...allProducts]
-                .filter(p => typeof p.rating === 'number')
+                .filter(p => typeof p.rating === 'number' && p.rating > 0)
                 .sort((a,b) => (b.rating || 0) - (a.rating || 0))
             const topRatedProducts = takeWithFallback(ratingPool, 9)
 
@@ -254,7 +279,7 @@ product_details = async (req, res) => {
 
         // Track product view for authenticated users (for personalized recommendations)
         // authMiddleware sets req.id; header-based tokens may set req.user
-        const customerId = req.user?.id || req.user?._id || req.id
+        const customerId = req.user?.id || req.user?._id || req.id || this.getCustomerIdFromRequest(req)
         if (customerId) {
             const existingRecord = await browsingHistoryModel.findOne({ 
                 userId: new ObjectId(customerId),

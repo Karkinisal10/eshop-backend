@@ -493,9 +493,9 @@ class orderController{
         const productDetails = (order.products || []).map((item, index) => ({
             identity: item._id ? item._id.toString() : `item-${index + 1}`,
             name: item.name || item.productName || 'Item',
-            total_price: (item.price || 0) * (item.quantity || 1),
-            quantity: item.quantity || 1,
-            unit_price: item.price || 0
+            total_price: Math.round(Number(item.price || 0) * Number(item.quantity || 1) * 100),
+            quantity: Number(item.quantity || 1),
+            unit_price: Math.round(Number(item.price || 0) * 100)
         }))
 
         const payload = {

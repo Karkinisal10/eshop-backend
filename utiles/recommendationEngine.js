@@ -116,19 +116,19 @@ class RecommendationEngine {
 
         switch (type) {
             case 'featured':
-                // Featured: Balanced score of rating, discount, and recency
+                // Featured: Prioritize products with both good ratings and discounts
                 scoredProducts = allProducts.map(product => {
-                    const recencyScore = this.calculateRecencyScore(product.createdAt);
                     const ratingScore = (product.rating || 0) / 5; // Normalize to 0-1
                     const discountScore = (product.discount || 0) / 100; // Normalize to 0-1
                     const stockScore = product.stock > 0 ? 1 : 0;
+                    const recencyScore = this.calculateRecencyScore(product.createdAt);
 
-                    // Weighted scoring: 30% recency, 40% rating, 20% discount, 10% stock
+                    // Weighted scoring: 45% rating, 35% discount, 15% stock, 5% recency
                     const totalScore = (
-                        recencyScore * 0.3 +
-                        ratingScore * 0.4 +
-                        discountScore * 0.2 +
-                        stockScore * 0.1
+                        ratingScore * 0.45 +
+                        discountScore * 0.35 +
+                        stockScore * 0.15 +
+                        recencyScore * 0.05
                     );
 
                     return { product, score: totalScore };
