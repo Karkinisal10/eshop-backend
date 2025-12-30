@@ -9,6 +9,7 @@ const authOrder = require('../../models/authOrder')
 const sellerCustomerMessage = require('../../models/chat/sellerCustomerMessage') 
 const bannerModel = require('../../models/bannerModel') 
 const reviewModel = require('../../models/reviewModel')
+const withdrowRequest = require('../../models/withdrowRequest')
 const moment = require("moment")
 const { mongo: {ObjectId}} = require('mongoose')
 const cloudinary = require('cloudinary').v2
@@ -33,6 +34,60 @@ class dashboardController{
          const totalSeller = await sellerModel.find({}).countDocuments()
          const messages = await adminSellerMessage.find({}).limit(3)
          const recentOrders = await customerOrder.find({}).limit(5)
+
+         // Get seller payment statistics
+         const sellerPayments = await withdrowRequest.aggregate([
+            {
+                $match: { status: 'success' }
+            },
+            {
+                $group: {
+                    _id: '$sellerId',
+                    totalPaid: { $sum: '$amount' },
+                    paymentCount: { $sum: 1 }
+                }
+            },
+            {
+                $lookup: {
+                    from: 'sellers',
+                    localField: '_id',
+                    foreignField: '_id',
+                    as: 'sellerInfo'
+                }
+            },
+            {
+                $unwind: '$sellerInfo'
+            },
+            {
+                $project: {
+                    sellerId: '$_id',
+                    sellerName: '$sellerInfo.name',
+                    sellerEmail: '$sellerInfo.email',
+                    shopName: '$sellerInfo.shopInfo.shopName',
+                    totalPaid: 1,
+                    paymentCount: 1
+                }
+            },
+            {
+                $sort: { totalPaid: -1 }
+            },
+            {
+                $limit: 10
+            }
+         ])
+
+         const totalPaidToSellers = await withdrowRequest.aggregate([
+            {
+                $match: { status: 'success' }
+            },
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: '$amount' }
+                }
+            }
+         ])
+
          responseReturn(res, 200, {
             totalProduct,
             totalOrder,
@@ -40,7 +95,8 @@ class dashboardController{
             messages,
             recentOrders,
             totalSale: totalSale.length > 0 ? totalSale[0].totalAmount : 0,
-
+            sellerPayments,
+            totalPaidToSellers: totalPaidToSellers.length > 0 ? totalPaidToSellers[0].total : 0
          })
 
         } catch (error) {
@@ -121,6 +177,102 @@ class dashboardController{
             console.log(error.message)
         }
         
+    }
+    //end Method 
+
+    get_seller_monthly_analytics = async (req, res) => {
+        const { id } = req
+        try {
+            // Get monthly sales data for last 12 months
+            const monthlyData = await authOrder.aggregate([
+                {
+                    $match: {
+                        sellerId: new ObjectId(id)
+                    }
+                },
+                {
+                    $group: {
+                        _id: {
+                            month: { $month: '$createdAt' },
+                            year: { $year: '$createdAt' }
+                        },
+                        totalOrders: { $sum: 1 },
+                        totalRevenue: { $sum: '$price' }
+                    }
+                },
+                {
+                    $sort: { '_id.year': 1, '_id.month': 1 }
+                }
+            ])
+
+            // Format data for chart - fill in missing months with 0
+            const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+            const ordersData = new Array(12).fill(0)
+            const revenueData = new Array(12).fill(0)
+            const salesData = new Array(12).fill(0)
+
+            monthlyData.forEach(item => {
+                const monthIndex = item._id.month - 1
+                ordersData[monthIndex] = item.totalOrders
+                revenueData[monthIndex] = Math.round(item.totalRevenue)
+                salesData[monthIndex] = item.totalOrders * 10 // Estimated sales count
+            })
+
+            // Get product performance data
+            const productPerformance = await authOrder.aggregate([
+                {
+                    $match: {
+                        sellerId: new ObjectId(id)
+                    }
+                },
+                {
+                    $unwind: '$products'
+                },
+                {
+                    $group: {
+                        _id: '$products.productTitle',
+                        totalSold: { $sum: '$products.quantity' },
+                        revenue: { $sum: { $multiply: ['$products.price', '$products.quantity'] } }
+                    }
+                },
+                {
+                    $sort: { totalSold: -1 }
+                },
+                {
+                    $limit: 5
+                }
+            ])
+
+            // Get order status distribution
+            const orderStatusDistribution = await authOrder.aggregate([
+                {
+                    $match: {
+                        sellerId: new ObjectId(id)
+                    }
+                },
+                {
+                    $group: {
+                        _id: '$delivery_status',
+                        count: { $sum: 1 }
+                    }
+                }
+            ])
+
+            responseReturn(res, 200, {
+                monthlyData: {
+                    categories: monthLabels,
+                    orders: ordersData,
+                    revenue: revenueData,
+                    sales: salesData
+                },
+                productPerformance,
+                orderStatusDistribution
+            })
+
+        } catch (error) {
+            console.log('get_seller_monthly_analytics error: ' + error.message)
+            responseReturn(res, 500, { message: 'Internal server error' })
+        }
     }
     //end Method 
 

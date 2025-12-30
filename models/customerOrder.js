@@ -25,6 +25,14 @@ const customerOrder = new Schema({
         type : String,
         required : true
     },
+    payment_provider: {
+        type: String,
+        default: 'stripe'
+    },
+    payment_info: {
+        type: Object,
+        default: {}
+    },
     date : {
         type : String,
         required : true

@@ -38,6 +38,14 @@ const sellerSchema = new Schema({
         type: Object,
         default : {}
     },
+    khaltiName: {
+        type: String,
+        default: ''
+    },
+    khaltiNumber: {
+        type: String,
+        default: ''
+    }
 },{ timestamps: true })
 
 sellerSchema.index({

@@ -15,7 +15,7 @@ class productController{
             let {images} = files;
 
             // Basic validation before uploads
-            if (!name || !category || !description || !stock || !price || !brand || !shopName) {
+            if (!name || !category || !description || !stock || !price || !brand) {
                 return responseReturn(res, 400,{ error : 'Please fill all required fields.'})
             }
 

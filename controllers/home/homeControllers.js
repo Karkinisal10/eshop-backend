@@ -3,6 +3,7 @@ const productModel = require('../../models/productModel')
 const reviewModel = require('../../models/reviewModel')
 const customerOrderModel = require('../../models/customerOrder')
 const authOrderModel = require('../../models/authOrder')
+const sellerModel = require('../../models/sellerModel')
 const { responseReturn } = require("../../utiles/response")
 const queryProducts = require('../../utiles/queryProducts')
 const recommendationEngine = require('../../utiles/recommendationEngine')
@@ -10,6 +11,12 @@ const moment = require('moment')
 const { mongo: {ObjectId}} = require('mongoose')
 
 class homeControllers{
+
+    // Helper method to get active seller IDs
+    getActiveSellerIds = async () => {
+        const activeSellers = await sellerModel.find({ status: 'active' }).select('_id')
+        return activeSellers.map(seller => seller._id)
+    }
 
     formateProduct = (products) => {
         const productArray = [];
@@ -44,32 +51,78 @@ class homeControllers{
 
     get_products = async(req, res) => {
         try {
-            // Get all products for recommendation engine
-            const allProducts = await productModel.find({})
+            // Get active seller IDs
+            const activeSellerIds = await this.getActiveSellerIds()
             
-            // Use recommendation engine for intelligent product selection
-            const featuredProducts = recommendationEngine.getRecommendedProducts(
-                allProducts, 
-                'featured', 
+            // Get all products for recommendation engine from active sellers only
+            const allProducts = await productModel.find({ sellerId: { $in: activeSellerIds } })
+            
+            // Feature: keep recommendation for featured
+            let featuredProducts = recommendationEngine.getRecommendedProducts(
+                allProducts,
+                'featured',
                 12
             )
-            
-            const latestProducts = recommendationEngine.getRecommendedProducts(
-                allProducts, 
-                'trending', 
-                9
-            )
-            
-            const topRatedProducts = allProducts
-                .filter(p => p.rating > 0)
-                .sort((a, b) => b.rating - a.rating)
-                .slice(0, 9)
-            
-            const bestDealsProducts = recommendationEngine.getRecommendedProducts(
-                allProducts, 
-                'best_deals', 
-                9
-            )
+            if (!featuredProducts || featuredProducts.length === 0) {
+                featuredProducts = [...allProducts].sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0,12)
+            }
+
+            // Ensure sections adhere to clear rules and avoid duplicates where possible
+            const usedIds = new Set(featuredProducts.map(p => p._id.toString()))
+            const takeWithFallback = (list, count) => {
+                const out = []
+                const localSeen = new Set()
+                for (const p of list) {
+                    const id = p._id?.toString?.() || String(p._id)
+                    if (!usedIds.has(id) && !localSeen.has(id)) {
+                        out.push(p)
+                        localSeen.add(id)
+                        usedIds.add(id)
+                        if (out.length >= count) break
+                    }
+                }
+                if (out.length < count) {
+                    for (const p of list) {
+                        const id = p._id?.toString?.() || String(p._id)
+                        if (!localSeen.has(id)) {
+                            out.push(p)
+                            localSeen.add(id)
+                            if (out.length >= count) break
+                        }
+                    }
+                }
+                if (out.length < count) {
+                    for (const p of allProducts) {
+                        const id = p._id?.toString?.() || String(p._id)
+                        if (!localSeen.has(id)) {
+                            out.push(p)
+                            localSeen.add(id)
+                            if (out.length >= count) break
+                        }
+                    }
+                }
+                return out
+            }
+
+            // Latest: newest by createdAt
+            const latestPool = [...allProducts].sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt))
+            const latestProducts = takeWithFallback(latestPool, 9)
+
+            // Top Rated: highest rating
+            const ratingPool = [...allProducts]
+                .filter(p => typeof p.rating === 'number')
+                .sort((a,b) => (b.rating || 0) - (a.rating || 0))
+            const topRatedProducts = takeWithFallback(ratingPool, 9)
+
+            // Discount: highest discount, tie-breaker newest
+            const discountPool = [...allProducts]
+                .filter(p => (p.discount || 0) > 0)
+                .sort((a,b) => {
+                    const d = (b.discount || 0) - (a.discount || 0)
+                    if (d !== 0) return d
+                    return new Date(b.createdAt) - new Date(a.createdAt)
+                })
+            const bestDealsProducts = takeWithFallback(discountPool, 9)
 
             responseReturn(res, 200,{
                 products: featuredProducts,
@@ -86,15 +139,18 @@ class homeControllers{
 
    price_range_product = async (req, res) => {
     try {
+        // Get active seller IDs
+        const activeSellerIds = await this.getActiveSellerIds()
+        
         const priceRange = {
             low: 0,
             high: 100,
         }
-        const products = await productModel.find({}).limit(9).sort({
+        const products = await productModel.find({ sellerId: { $in: activeSellerIds } }).limit(9).sort({
             createdAt: -1 // 1 for asc -1 is for Desc
         })
         const latest_product = this.formateProduct(products);
-        const getForPrice = await productModel.find({}).sort({
+        const getForPrice = await productModel.find({ sellerId: { $in: activeSellerIds } }).sort({
             'price': 1
         })
         if (getForPrice.length > 0) {
@@ -123,7 +179,10 @@ query_products = async (req, res) => {
     req.query.parPage = parPage
 
     try {
-        const products = await productModel.find({}).sort({
+        // Get active seller IDs
+        const activeSellerIds = await this.getActiveSellerIds()
+        
+        const products = await productModel.find({ sellerId: { $in: activeSellerIds } }).sort({
             createdAt: -1
         })
         const totalProduct = new queryProducts(products, req.query).categoryQuery().ratingQuery().searchQuery().priceQuery().sortByPrice().countProducts();
@@ -147,7 +206,10 @@ query_products = async (req, res) => {
 product_details = async (req, res) => {
     const { slug } = req.params
     try {
-        const product = await productModel.findOne({slug})
+        // Get active seller IDs
+        const activeSellerIds = await this.getActiveSellerIds()
+        
+        const product = await productModel.findOne({ slug, sellerId: { $in: activeSellerIds } })
         
         if (!product) {
             return responseReturn(res, 404, { error: 'Product not found' })
@@ -158,8 +220,8 @@ product_details = async (req, res) => {
             $inc: { views: 1 }
         })
 
-        // Get all products for recommendation
-        const allProducts = await productModel.find({})
+        // Get all products for recommendation from active sellers only
+        const allProducts = await productModel.find({ sellerId: { $in: activeSellerIds } })
         
         // Use content-based filtering for related products (same category)
         // Include the target product as the first item so the engine has a baseline
@@ -175,7 +237,7 @@ product_details = async (req, res) => {
                 .filter(p => p._id.toString() !== product._id.toString())
             : []
         
-        // Get more products from the same seller
+        // Get more products from the same seller (already filtered by active seller)
         const moreProducts = await productModel.find({
             $and: [{
                 _id: {
@@ -185,6 +247,11 @@ product_details = async (req, res) => {
             {
                 sellerId: {
                     $eq: product.sellerId
+                }
+            },
+            {
+                sellerId: {
+                    $in: activeSellerIds
                 }
             }
            ]
@@ -206,18 +273,20 @@ get_seller_products = async (req, res) => {
     const { sellerId } = req.params;
     const { page = 1, parPage = 12 } = req.query;
     const skipPage = parseInt(parPage) * (parseInt(page) - 1);
-    const sellerModel = require('../../models/sellerModel');
 
     try {
+        // Check if seller is active
+        const seller = await sellerModel.findById(sellerId)
+        if (!seller || seller.status !== 'active') {
+            return responseReturn(res, 404, { error: 'Seller not found or inactive' })
+        }
+        
         const products = await productModel.find({ sellerId })
             .skip(skipPage)
             .limit(parseInt(parPage))
             .sort({ createdAt: -1 });
 
         const totalProducts = await productModel.countDocuments({ sellerId });
-        
-        // Get seller information
-        const seller = await sellerModel.findById(sellerId);
         
         let shopName = 'Shop';
         if (seller) {

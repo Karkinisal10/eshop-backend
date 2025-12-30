@@ -1,4 +1,6 @@
 const cardModel = require('../../models/cardModel')
+const productModel = require('../../models/productModel')
+const sellerModel = require('../../models/sellerModel')
 const { responseReturn } = require('../../utiles/response')
 const { mongo: {ObjectId}} = require('mongoose')
 const wishlistModel = require('../../models/wishlistModel')
@@ -8,6 +10,17 @@ class cardController{
     add_to_card =  async(req, res) => {
         const { userId, productId, quantity } = req.body
         try {
+            // Check if product exists and seller is active
+            const productInfo = await productModel.findById(productId)
+            if (!productInfo) {
+                return responseReturn(res, 404, { error: 'Product not found' })
+            }
+            
+            const seller = await sellerModel.findById(productInfo.sellerId)
+            if (!seller || seller.status !== 'active') {
+                return responseReturn(res, 400, { error: 'This product is currently unavailable' })
+            }
+            
             const product = await cardModel.findOne({
                 $and: [{
                     productId : {
@@ -57,16 +70,30 @@ class cardController{
                 foreignField: "_id",
                 as: 'products'
             }
-        } 
+        },
+        {
+            $lookup: {
+                from: 'sellers',
+                localField: 'products.sellerId',
+                foreignField: '_id',
+                as: 'seller'
+            }
+        }
       ])
+      
+      // Filter out products from inactive sellers
+      const activeSellerProducts = card_products.filter(p => {
+        return p.seller && p.seller.length > 0 && p.seller[0].status === 'active'
+      })
+      
       let buy_product_item = 0
       let calculatePrice = 0;
       let card_product_count = 0;
-      const outOfStockProduct = card_products.filter(p => p.products[0].stock < p.quantity)
+      const outOfStockProduct = activeSellerProducts.filter(p => p.products[0].stock < p.quantity)
       for (let i = 0; i < outOfStockProduct.length; i++) {
          card_product_count = card_product_count + outOfStockProduct[i].quantity        
       }
-      const stockProduct = card_products.filter(p => p.products[0].stock >= p.quantity)
+      const stockProduct = activeSellerProducts.filter(p => p.products[0].stock >= p.quantity)
       for (let i = 0; i < stockProduct.length; i++) {
         const { quantity } = stockProduct[i]
         card_product_count = buy_product_item + quantity

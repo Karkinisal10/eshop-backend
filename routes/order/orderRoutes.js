@@ -9,6 +9,8 @@ router.get('/home/coustomer/get-order-details/:orderId',orderController.get_orde
 
 router.post('/order/create-payment',orderController.create_payment)
 router.get('/order/confirm/:orderId',orderController.order_confirm)
+router.post('/order/khalti/initiate',orderController.initiate_khalti_payment)
+router.post('/order/khalti/verify',orderController.verify_khalti_payment)
 
 // Admin
 router.get('/admin/orders',orderController.get_admin_orders)

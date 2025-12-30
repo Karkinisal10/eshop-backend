@@ -123,6 +123,7 @@ app.use(bodyParser.json())
 app.use(cookieParser())
  
 app.use('/api/home',require('./routes/home/homeRoutes'))
+app.use('/api',require('./routes/home/shippingAddressRoutes'))
 app.use('/api',require('./routes/authRoutes'))
 app.use('/api',require('./routes/otpRoutes'))
 app.use('/api',require('./routes/order/orderRoutes'))
@@ -134,6 +135,7 @@ app.use('/api',require('./routes/home/customerAuthRoutes'))
 app.use('/api',require('./routes/chatRoutes'))
 app.use('/api',require('./routes/paymentRoutes'))
 app.use('/api',require('./routes/dashboard/dashboardRoutes'))
+app.use('/api/chatbot',require('./routes/chatbotRoutes'))
 
 app.get('/',(req,res) => res.send('Hello Server'))
 const port = process.env.PORT

@@ -2,7 +2,7 @@ const otpModel = require('../models/otpModel')
 const sellerModel = require('../models/sellerModel')
 const adminModel = require('../models/adminModel')
 const customerModel = require('../models/customerModel')
-const sendOTPEmail = require('../utiles/sendEmail')
+const { sendOTPEmail } = require('../utiles/sendEmail')
 const { responseReturn } = require('../utiles/response')
 const { createToken } = require('../utiles/tokenCreate')
 

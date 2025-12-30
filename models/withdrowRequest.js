@@ -12,7 +12,14 @@ const withdrowSchema = new Schema({
     status: {
         type: String,
         default : 'pending'
-    } 
+    },
+    receiptId: {
+        type: String,
+        default: ''
+    },
+    paidAt: {
+        type: Date
+    }
 },{ timestamps: true })
 
 module.exports = model('withdrowRequest',withdrowSchema)
