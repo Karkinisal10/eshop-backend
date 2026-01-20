@@ -13,7 +13,7 @@ router.get('/seller-products/:sellerId',homeControllers.get_seller_products)
 router.post('/customer/submit-review',homeControllers.submit_review)
 router.get('/customer/get-reviews/:productId',homeControllers.get_reviews)
 router.post('/customer/can-review/:productId',homeControllers.can_review)
-router.post('/customer/track-view',authMiddleware,homeControllers.track_product_view)
+router.post('/customer/track-view', authMiddleware, homeControllers.track_product_view)
   
 
 module.exports = router 

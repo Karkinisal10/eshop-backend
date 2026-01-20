@@ -197,60 +197,98 @@ class RecommendationEngine {
         return Math.max(0.1, 1 - (daysDiff / 90) * 0.9);
     }
 
-    // Get personalized recommendations based on user's browsing history
-    getPersonalizedRecommendations(userHistory, allProducts, limit = 10) {
-        if (!userHistory || userHistory.length === 0) {
-            // If no history, return featured products
+    recencyBoost(date, halfLifeDays = 30) {
+        if (!date) return 1;
+        const now = new Date();
+        const d = new Date(date);
+        const days = Math.max(0, (now - d) / (1000 * 60 * 60 * 24));
+        // Exponential decay with a floor so old events still contribute a bit
+        const decay = Math.pow(0.5, days / halfLifeDays);
+        return Math.max(0.35, decay);
+    }
+
+    // Get personalized recommendations blending browse, purchases, and review sentiment
+    getPersonalizedRecommendations(userHistory, allProducts, options = {}) {
+        const {
+            limit = 10,
+            purchaseProducts = [],
+            positiveReviewProducts = [],
+            wishlistProducts = [],
+            cartProducts = []
+        } = options;
+
+        if ((!userHistory || userHistory.length === 0) && purchaseProducts.length === 0 && positiveReviewProducts.length === 0 && wishlistProducts.length === 0 && cartProducts.length === 0) {
             return this.getRecommendedProducts(allProducts, 'featured', limit);
         }
 
-        // Build user profile from browsing history
         const tfidf = this.buildTfIdfMatrix(allProducts);
         const vocabulary = this.buildVocabulary(tfidf, allProducts.length);
 
-        // Create user profile vector (average of viewed products)
         const userVector = new Array(vocabulary.length).fill(0);
-        let viewedCount = 0;
+        let weightSum = 0;
 
-        userHistory.forEach(historyItem => {
-            const productIndex = allProducts.findIndex(
-                p => p._id.toString() === historyItem.productId.toString()
-            );
+        const addProductToProfile = (product, weight = 1) => {
+            const productIndex = allProducts.findIndex(p => p._id.toString() === product._id.toString());
+            if (productIndex === -1) return;
+            const productVector = this.getTfIdfVector(tfidf, productIndex, vocabulary);
+            productVector.forEach((val, idx) => {
+                userVector[idx] += val * weight;
+            });
+            weightSum += weight;
+        };
 
-            if (productIndex !== -1) {
-                const productVector = this.getTfIdfVector(tfidf, productIndex, vocabulary);
-                productVector.forEach((val, idx) => {
-                    userVector[idx] += val;
-                });
-                viewedCount++;
-            }
+        // Weights: purchases > positive reviews > browsing
+        const browseWeight = 1;
+        const purchaseWeight = 2.5;
+        const reviewWeight = 1.5;
+        const wishlistWeight = 2.0;
+        const cartWeight = 2.8;
+
+        (userHistory || []).forEach(historyItem => {
+            const decay = this.recencyBoost(historyItem.viewedAt);
+            const product = allProducts.find(p => p._id.toString() === historyItem.productId.toString());
+            if (product) addProductToProfile(product, browseWeight * decay);
         });
 
-        // Average the vectors
-        if (viewedCount > 0) {
-            userVector.forEach((val, idx) => {
-                userVector[idx] = val / viewedCount;
-            });
+        purchaseProducts.forEach(product => {
+            const decay = this.recencyBoost(product.purchasedAt || product.createdAt);
+            addProductToProfile(product, purchaseWeight * decay);
+        });
+
+        positiveReviewProducts.forEach(product => {
+            addProductToProfile(product, reviewWeight);
+        });
+
+        wishlistProducts.forEach(product => {
+            const decay = this.recencyBoost(product.addedAt || product.createdAt, 10);
+            addProductToProfile(product, wishlistWeight * decay);
+        });
+
+        cartProducts.forEach(product => {
+            const decay = this.recencyBoost(product.addedAt || product.updatedAt || product.createdAt, 10);
+            addProductToProfile(product, cartWeight * decay);
+        });
+
+        if (weightSum > 0) {
+            for (let i = 0; i < userVector.length; i++) {
+                userVector[i] = userVector[i] / weightSum;
+            }
         }
 
-        // Calculate similarity with all products
-        const recommendations = allProducts.map((product, index) => {
-            // Exclude products already in history
-            const inHistory = userHistory.some(
-                h => h.productId.toString() === product._id.toString()
-            );
+        const historyIds = new Set((userHistory || []).map(h => h.productId.toString()));
+        const purchaseIds = new Set(purchaseProducts.map(p => p._id.toString()));
 
-            if (inHistory) {
+        const recommendations = allProducts.map((product, index) => {
+            const id = product._id.toString();
+            // Exclude items the user already viewed frequently or bought very recently
+            if (historyIds.has(id) || purchaseIds.has(id)) {
                 return { product, similarity: -1 };
             }
-
             const productVector = this.getTfIdfVector(tfidf, index, vocabulary);
             const similarity = this.cosineSimilarity(userVector, productVector);
-
             return { product, similarity };
         });
 
-        // Primary: only positives
         const positive = recommendations
             .filter(item => item.similarity > 0)
             .sort((a, b) => b.similarity - a.similarity);
@@ -259,7 +297,6 @@ class RecommendationEngine {
             return positive.slice(0, limit).map(item => item.product);
         }
 
-        // Fallback: include zero-similarity items (excluding history) to avoid empty results on small catalogs
         const nonHistory = recommendations
             .filter(item => item.similarity >= 0)
             .sort((a, b) => b.similarity - a.similarity)

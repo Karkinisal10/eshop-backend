@@ -4,6 +4,8 @@ const reviewModel = require('../../models/reviewModel')
 const customerOrderModel = require('../../models/customerOrder')
 const authOrderModel = require('../../models/authOrder')
 const sellerModel = require('../../models/sellerModel')
+const cardModel = require('../../models/cardModel')
+const wishlistModel = require('../../models/wishlistModel')
 const browsingHistoryModel = require('../../models/browsingHistoryModel')
 const { responseReturn } = require("../../utiles/response")
 const queryProducts = require('../../utiles/queryProducts')
@@ -87,10 +89,71 @@ class homeControllers{
                 customerId = this.getCustomerIdFromRequest(req)
             }
             let featuredProducts = []
+            let userHistory = []
 
             if (customerId) {
+                // Recent paid purchases to strengthen the profile
+                const purchaseOrders = await customerOrderModel.find({
+                    customerId: new ObjectId(customerId),
+                    payment_status: 'paid'
+                }).sort({ createdAt: -1 }).limit(5)
+
+                const purchasedIds = []
+                purchaseOrders.forEach(order => {
+                    if (Array.isArray(order.products)) {
+                        order.products.forEach(item => {
+                            const pid = item?._id || item?.productId
+                            if (pid) purchasedIds.push(pid)
+                        })
+                    }
+                })
+
+                // Positive reviews to capture explicit likes
+                const positiveReviews = await reviewModel.find({
+                    customerId: new ObjectId(customerId),
+                    rating: { $gte: 4 }
+                }).select('productId').limit(20)
+                const positiveReviewIds = positiveReviews.map(r => r.productId)
+
+                // Wishlist signals (latest 20)
+                const wishlistEntries = await wishlistModel.find({ userId: customerId }).sort({ createdAt: -1 }).limit(20)
+                const wishlistIds = wishlistEntries.map(w => w.productId)
+
+                // Cart signals (current cart items)
+                const cartEntries = await cardModel.find({ userId: new ObjectId(customerId) }).sort({ updatedAt: -1 }).limit(20)
+                const cartIds = cartEntries.map(c => c.productId)
+
+                // Fetch product docs for purchases, liked reviews, wishlist, cart (active sellers only)
+                const purchaseProducts = purchasedIds.length > 0
+                    ? await productModel.find({
+                        _id: { $in: purchasedIds },
+                        sellerId: { $in: activeSellerIds }
+                    })
+                    : []
+
+                const positiveReviewProducts = positiveReviewIds.length > 0
+                    ? await productModel.find({
+                        _id: { $in: positiveReviewIds },
+                        sellerId: { $in: activeSellerIds }
+                    })
+                    : []
+
+                const wishlistProducts = wishlistIds.length > 0
+                    ? await productModel.find({
+                        _id: { $in: wishlistIds.map(id => new ObjectId(id)) },
+                        sellerId: { $in: activeSellerIds }
+                    })
+                    : []
+
+                const cartProducts = cartIds.length > 0
+                    ? await productModel.find({
+                        _id: { $in: cartIds },
+                        sellerId: { $in: activeSellerIds }
+                    })
+                    : []
+
                 // Get user's browsing history for personalized recommendations
-                const userHistory = await browsingHistoryModel.find({
+                userHistory = await browsingHistoryModel.find({
                     userId: new ObjectId(customerId)
                 }).sort({ viewedAt: -1 }).limit(20)
 
@@ -99,7 +162,13 @@ class homeControllers{
                     featuredProducts = recommendationEngine.getPersonalizedRecommendations(
                         userHistory,
                         allProducts,
-                        12
+                        {
+                            limit: 12,
+                            purchaseProducts,
+                                positiveReviewProducts,
+                                wishlistProducts,
+                                cartProducts
+                        }
                     )
                     console.log('[personalized] user', customerId?.toString?.() || customerId, 'history', userHistory.length, 'personalizedCount', featuredProducts?.length)
                 } else {
@@ -124,7 +193,7 @@ class homeControllers{
                 featuredProducts = [...allProducts].sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0,12)
             }
 
-            // Ensure sections adhere to clear rules and avoid duplicates where possible
+            // Helper function to take items without duplicates
             const usedIds = new Set(featuredProducts.map(p => p._id.toString()))
             const takeWithFallback = (list, count) => {
                 const out = []
@@ -160,6 +229,21 @@ class homeControllers{
                 }
                 return out
             }
+
+            // Fast-react layer: prioritize products from the most recently viewed product's category
+            const boostByLastViewed = () => {
+                const lastHistoryItem = userHistory?.[0]
+                if (!lastHistoryItem) return
+                const lastViewed = allProducts.find(p => p._id.toString() === lastHistoryItem.productId.toString())
+                if (!lastViewed) return
+                const sameCategoryRecent = [...allProducts]
+                    .filter(p => p.category === lastViewed.category && p._id.toString() !== lastViewed._id.toString())
+                    .sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt))
+                const boosted = takeWithFallback(sameCategoryRecent, 5)
+                featuredProducts = takeWithFallback([...boosted, ...featuredProducts], 12)
+            }
+
+            boostByLastViewed()
 
             // Latest: newest by createdAt
             const latestPool = [...allProducts].sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt))
@@ -646,13 +730,15 @@ can_review = async (req, res) => {
 
 track_product_view = async (req, res) => {
     const { productId } = req.body
-    // authMiddleware sets req.id; header-based tokens may set req.user
-    const customerId = req.user?.id || req.user?._id || req.id
+    // authMiddleware sets req.id; this now works reliably
+    const customerId = req.id
     
     try {
-        // Only track for authenticated customers
-        if (!customerId || !productId) {
-            return responseReturn(res, 400, { message: 'Missing customerId or productId' })
+        if (!customerId) {
+            return responseReturn(res, 409, { error: 'Please Login First' })
+        }
+        if (!productId) {
+            return responseReturn(res, 400, { message: 'Missing productId' })
         }
 
         // Get product details for caching
@@ -671,7 +757,7 @@ track_product_view = async (req, res) => {
             // Update existing record with new timestamp
             await browsingHistoryModel.findByIdAndUpdate(existingRecord._id, {
                 viewedAt: new Date(),
-                $inc: { timeSpent: 1 }  // Increment by 1 second (or unit)
+                $inc: { timeSpent: 1 }
             })
         } else {
             // Create new browsing history record
