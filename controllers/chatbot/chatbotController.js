@@ -1,5 +1,6 @@
 const productModel = require('../../models/productModel');
 const categoryModel = require('../../models/categoryModel');
+const customerOrderModel = require('../../models/customerOrder');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 // Initialize Gemini AI
@@ -15,6 +16,14 @@ const extractProductKeywords = (query) => {
         .filter(word => !commonWords.includes(word) && word.length > 2);
     
     return keywords;
+};
+
+const extractOrderId = (query) => {
+    if (!query) {
+        return null;
+    }
+    const match = query.match(/[a-f0-9]{24}/i);
+    return match ? match[0] : null;
 };
 
 // Use Gemini to determine user intent
@@ -64,7 +73,7 @@ const buildProductSummary = (products) => products.map((p, idx) => {
 // Get product recommendations using Gemini AI
 const getProductRecommendations = async (req, res) => {
     try {
-        const { query } = req.body;
+        const { query, orderId: orderIdFromBody, mode } = req.body;
 
         if (!query || query.trim().length === 0) {
             return res.status(200).json({
@@ -84,13 +93,54 @@ const getProductRecommendations = async (req, res) => {
             });
         }
 
-        const userIntent = await getUserIntent(query);
+        const userIntent = mode === 'search' ? { intent: 'search', searchTerm: query } : await getUserIntent(query);
 
-        // Order intent is not fully wired; acknowledge gracefully
+        // Order intent
         if (userIntent.intent === 'order') {
+            const orderId = orderIdFromBody || userIntent.orderId || extractOrderId(query);
+            if (!orderId) {
+                return res.status(200).json({
+                    success: true,
+                    message: "Sure! Please share your 24-character order ID (example: 65f1c2a7b9d2e1f0a3b4c5d6) so I can check the status.",
+                    products: [],
+                    categories: [],
+                    hasProducts: false,
+                    hasCategories: false
+                });
+            }
+
+            const order = await customerOrderModel.findById(orderId).select('delivery_status payment_status date price');
+            if (!order) {
+                return res.status(200).json({
+                    success: true,
+                    message: "I couldn’t find that order ID. Please double-check it and try again.",
+                    products: [],
+                    categories: [],
+                    hasProducts: false,
+                    hasCategories: false
+                });
+            }
+
+            let orderMessage;
+            try {
+                const prompt = `You are talki, a friendly shopping assistant. Respond in 1-2 sentences, be helpful, and end with a question. Use only this order data and don't invent details.
+
+Order ID: ${orderId}
+Payment status: ${order.payment_status}
+Delivery status: ${order.delivery_status}
+Order date: ${order.date}
+Total: NPR ${order.price}
+`;
+                const geminiResult = await model.generateContent(prompt);
+                orderMessage = geminiResult.response.text();
+            } catch (geminiError) {
+                console.error('Gemini API Error:', geminiError);
+                orderMessage = `Your order ${orderId} is ${order.delivery_status} and payment is ${order.payment_status}. Do you want help with anything else?`;
+            }
+
             return res.status(200).json({
                 success: true,
-                message: "I can help with orders once tracking is connected. Please share your order ID and email, and I'll check for you.",
+                message: orderMessage,
                 products: [],
                 categories: [],
                 hasProducts: false,
@@ -128,13 +178,13 @@ const getProductRecommendations = async (req, res) => {
             let geminiResponse;
             try {
                 const productSummary = buildProductSummary(products);
-                const prompt = `You are talki, a friendly human-like shopping assistant. Be concise (2 sentences max), casual, and end with a question. Use the provided real products only. Do NOT invent prices or details.
+                const prompt = `You are talki, a friendly shopping assistant. Create a smart product suggestion in 1-2 sentences, friendly and concise, and end with a question. Mention up to 3 product names if available. Use ONLY the provided products and do NOT invent details, prices, or features.
 
-User asked: "${searchTerm}"
+User query: "${searchTerm}"
 Products:
 ${productSummary || 'None found'}
 
-If no products, apologize and suggest browsing categories.`;
+If no products, apologize briefly and suggest browsing categories.`;
                 const geminiResult = await model.generateContent(prompt);
                 geminiResponse = geminiResult.response.text();
             } catch (geminiError) {

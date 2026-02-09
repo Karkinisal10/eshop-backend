@@ -35,6 +35,62 @@ class dashboardController{
          const messages = await adminSellerMessage.find({}).limit(3)
          const recentOrders = await customerOrder.find({}).limit(5)
 
+         const topSellers = await authOrder.aggregate([
+            {
+                $group: {
+                    _id: '$sellerId',
+                    totalOrders: { $sum: 1 },
+                    totalRevenue: { $sum: '$price' }
+                }
+            },
+            {
+                $lookup: {
+                    from: 'sellers',
+                    localField: '_id',
+                    foreignField: '_id',
+                    as: 'sellerInfo'
+                }
+            },
+            { $unwind: '$sellerInfo' },
+            {
+                $project: {
+                    sellerId: '$_id',
+                    sellerName: '$sellerInfo.name',
+                    sellerEmail: '$sellerInfo.email',
+                    shopName: '$sellerInfo.shopInfo.shopName',
+                    totalOrders: 1,
+                    totalRevenue: 1
+                }
+            },
+            { $sort: { totalRevenue: -1 } },
+            { $limit: 5 }
+         ])
+
+         const topProducts = await authOrder.aggregate([
+            { $unwind: '$products' },
+            {
+                $project: {
+                    productName: {
+                        $ifNull: [
+                            '$products.name',
+                            { $ifNull: ['$products.productName', { $ifNull: ['$products.productTitle', 'Unknown'] }] }
+                        ]
+                    },
+                    quantity: { $ifNull: ['$products.quantity', 0] },
+                    price: { $ifNull: ['$products.price', 0] }
+                }
+            },
+            {
+                $group: {
+                    _id: '$productName',
+                    totalSold: { $sum: '$quantity' },
+                    totalRevenue: { $sum: { $multiply: ['$price', '$quantity'] } }
+                }
+            },
+            { $sort: { totalSold: -1 } },
+            { $limit: 5 }
+         ])
+
          // Get seller payment statistics
          const sellerPayments = await withdrowRequest.aggregate([
             {
@@ -95,8 +151,10 @@ class dashboardController{
             messages,
             recentOrders,
             totalSale: totalSale.length > 0 ? totalSale[0].totalAmount : 0,
-            sellerPayments,
-            totalPaidToSellers: totalPaidToSellers.length > 0 ? totalPaidToSellers[0].total : 0
+                sellerPayments,
+                totalPaidToSellers: totalPaidToSellers.length > 0 ? totalPaidToSellers[0].total : 0,
+                topSellers,
+                topProducts
          })
 
         } catch (error) {
@@ -163,12 +221,18 @@ class dashboardController{
             sellerId: new ObjectId(id)
         }).limit(5)
 
+        const lowStockProducts = await productModel.find({
+            sellerId: new ObjectId(id),
+            stock: { $lte: 5 }
+        }).sort({ stock: 1, updatedAt: -1 }).limit(6).select('name stock images')
+
         responseReturn(res, 200, {
             totalProduct,
             totalOrder,
             totalPendingOrder,
             messages,
             recentOrders,
+            lowStockProducts,
             totalSale: totalSale.length > 0 ? totalSale[0].totalAmount : 0,
 
          })
@@ -229,10 +293,22 @@ class dashboardController{
                     $unwind: '$products'
                 },
                 {
+                    $project: {
+                        productName: {
+                            $ifNull: [
+                                '$products.name',
+                                { $ifNull: ['$products.productName', { $ifNull: ['$products.productTitle', 'Unknown'] }] }
+                            ]
+                        },
+                        quantity: { $ifNull: ['$products.quantity', 0] },
+                        price: { $ifNull: ['$products.price', 0] }
+                    }
+                },
+                {
                     $group: {
-                        _id: '$products.productTitle',
-                        totalSold: { $sum: '$products.quantity' },
-                        revenue: { $sum: { $multiply: ['$products.price', '$products.quantity'] } }
+                        _id: '$productName',
+                        totalSold: { $sum: '$quantity' },
+                        revenue: { $sum: { $multiply: ['$price', '$quantity'] } }
                     }
                 },
                 {

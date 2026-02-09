@@ -6,6 +6,7 @@ const myShopWallet = require('../../models/myShopWallet')
 const sellerWallet = require('../../models/sellerWallet')
 
 const cardModel = require('../../models/cardModel')
+const productModel = require('../../models/productModel')
 const moment = require("moment")
 const axios = require('axios')
 const { responseReturn } = require('../../utiles/response') 
@@ -197,6 +198,40 @@ class orderController{
  }
  // End Method 
 
+ get_order_status_public = async (req, res) => {
+    const { orderId } = req.params
+    try {
+        const order = await customerOrder.findById(orderId)
+        if (!order) {
+            return responseReturn(res, 404, { message: 'Order not found' })
+        }
+
+        const items = Array.isArray(order.products)
+            ? order.products.map(item => ({
+                _id: item?._id,
+                name: item?.name || item?.productName || 'Item',
+                quantity: Number(item?.quantity || 1),
+                price: Number(item?.price || 0)
+            }))
+            : []
+
+        responseReturn(res, 200, {
+            order: {
+                id: order._id,
+                delivery_status: order.delivery_status,
+                payment_status: order.payment_status,
+                total: order.price,
+                date: order.date,
+                items
+            }
+        })
+    } catch (error) {
+        console.log(error.message)
+        responseReturn(res, 500, { message: 'Internal Server Error' })
+    }
+ }
+ // End Method
+
  get_admin_orders = async(req, res) => {
     let {page,searchValue,parPage} = req.query
     page = parseInt(page)
@@ -315,7 +350,17 @@ class orderController{
     
     try {
         const order = await authOrderModel.findById(orderId)
-        responseReturn(res, 200, { order })
+        
+        // Get the customer order to fetch shipping info
+        const customerOrderData = await customerOrder.findById(order.orderId)
+        
+        // Combine the data
+        const orderWithShipping = {
+            ...order.toObject(),
+            shippingInfo: customerOrderData?.shippingInfo || {}
+        }
+        
+        responseReturn(res, 200, { order: orderWithShipping })
     } catch (error) {
         console.log('get seller details error' + error.message)
     }
@@ -375,6 +420,31 @@ class orderController{
     })
 
     const cuOrder = await customerOrder.findById(orderId)
+    if (cuOrder?.products?.length) {
+        const stockByProduct = new Map()
+        for (const item of cuOrder.products) {
+            const productId = item?._id || item?.productId || item?.product_id || item?.id
+            const quantity = Number(item?.quantity || 0)
+            if (!productId || quantity <= 0) {
+                continue
+            }
+            const key = productId.toString()
+            const current = stockByProduct.get(key) || 0
+            stockByProduct.set(key, current + quantity)
+        }
+
+        for (const [productId, quantity] of stockByProduct.entries()) {
+            const product = await productModel.findById(productId)
+            if (!product) {
+                continue
+            }
+            const currentStock = Number(product.stock || 0)
+            const newStock = Math.max(0, currentStock - quantity)
+            if (newStock !== currentStock) {
+                await productModel.findByIdAndUpdate(productId, { stock: newStock })
+            }
+        }
+    }
     const auOrder = await authOrderModel.find({
         orderId: new ObjectId(orderId)
     })

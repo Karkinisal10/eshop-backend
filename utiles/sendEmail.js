@@ -3,7 +3,7 @@ const nodemailer = require('nodemailer')
 const sendOTPEmail = async(email, otp, type = 'Login') => {
     try {
         const host = process.env.MAIL_HOST || 'smtp.mailtrap.io'
-        const port = Number(process.env.MAIL_PORT || 2525)
+        const port = Number(process.env.MAIL_PORT || 587)
         const user = process.env.MAIL_USER
         const pass = process.env.MAIL_PASS
 
@@ -16,8 +16,10 @@ const sendOTPEmail = async(email, otp, type = 'Login') => {
         const transporter = nodemailer.createTransport({
             host,
             port,
-            secure: false,
-            auth: { user, pass }
+            secure: port === 465,
+            auth: { user, pass },
+            connectionTimeout: 10000,
+            socketTimeout: 10000
         })
 
         const subject = type === 'Password Reset' 
@@ -57,7 +59,7 @@ const sendOTPEmail = async(email, otp, type = 'Login') => {
 const sendPaymentReceipt = async(email, sellerName, amount, receiptId, khaltiNumber) => {
     try {
         const host = process.env.MAIL_HOST || 'smtp.mailtrap.io'
-        const port = Number(process.env.MAIL_PORT || 2525)
+        const port = Number(process.env.MAIL_PORT || 587)
         const user = process.env.MAIL_USER
         const pass = process.env.MAIL_PASS
 
@@ -70,7 +72,9 @@ const sendPaymentReceipt = async(email, sellerName, amount, receiptId, khaltiNum
             host,
             port,
             secure: false,
-            auth: { user, pass }
+            auth: { user, pass },
+            connectionTimeout: 10000,
+            socketTimeout: 10000
         })
 
         const mailOptions = {

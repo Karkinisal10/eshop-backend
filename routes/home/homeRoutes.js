@@ -7,6 +7,7 @@ router.get('/get-products',homeControllers.get_products)
 router.get('/price-range-latest-product',homeControllers.price_range_product)
 router.get('/query-products',homeControllers.query_products)
 router.get('/product-details/:slug',homeControllers.product_details)
+router.get('/products/search',homeControllers.search_products)
 
 router.get('/seller-products/:sellerId',homeControllers.get_seller_products)
 

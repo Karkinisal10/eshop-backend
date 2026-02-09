@@ -96,8 +96,8 @@ class paymentController{
 
             const updatedSeller = await sellerModel.findByIdAndUpdate(
                 id,
-                { khaltiName, khaltiNumber },
-                { new: true, select: 'khaltiName khaltiNumber' }
+                { khaltiName, khaltiNumber, payment: 'active' },
+                { new: true, select: 'khaltiName khaltiNumber payment' }
             )
 
             responseReturn(res, 200, {

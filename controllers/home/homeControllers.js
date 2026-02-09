@@ -278,6 +278,39 @@ class homeControllers{
     }
    // end method 
 
+    search_products = async (req, res) => {
+        const { q } = req.query
+        const searchValue = (q || '').trim()
+        if (!searchValue) {
+            return responseReturn(res, 200, { products: [] })
+        }
+
+        try {
+            const activeSellerIds = await this.getActiveSellerIds()
+            const keywords = searchValue
+                .split(/\s+/)
+                .map(word => word.trim())
+                .filter(word => word.length > 1)
+            const regexTerm = keywords.length ? keywords.join('|') : searchValue
+
+            const products = await productModel.find({
+                sellerId: { $in: activeSellerIds },
+                $or: [
+                    { name: { $regex: regexTerm, $options: 'i' } },
+                    { category: { $regex: regexTerm, $options: 'i' } },
+                    { brand: { $regex: regexTerm, $options: 'i' } },
+                    { description: { $regex: regexTerm, $options: 'i' } }
+                ]
+            }).limit(5).select('name price discount images rating category slug')
+
+            responseReturn(res, 200, { products })
+        } catch (error) {
+            console.log(error.message)
+            responseReturn(res, 500, { message: 'Internal Server Error' })
+        }
+    }
+    // end method
+
    price_range_product = async (req, res) => {
     try {
         // Get active seller IDs
