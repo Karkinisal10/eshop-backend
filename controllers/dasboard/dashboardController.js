@@ -97,8 +97,19 @@ class dashboardController{
                 $match: { status: 'success' }
             },
             {
+                $addFields: {
+                    sellerObjectId: {
+                        $cond: [
+                            { $eq: [{ $type: '$sellerId' }, 'objectId'] },
+                            '$sellerId',
+                            { $toObjectId: '$sellerId' }
+                        ]
+                    }
+                }
+            },
+            {
                 $group: {
-                    _id: '$sellerId',
+                    _id: '$sellerObjectId',
                     totalPaid: { $sum: '$amount' },
                     paymentCount: { $sum: 1 }
                 }
@@ -347,6 +358,61 @@ class dashboardController{
 
         } catch (error) {
             console.log('get_seller_monthly_analytics error: ' + error.message)
+            responseReturn(res, 500, { message: 'Internal server error' })
+        }
+    }
+    //end Method 
+
+    get_admin_monthly_analytics = async (req, res) => {
+        try {
+            const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+            const monthlyOrders = await customerOrder.aggregate([
+                {
+                    $group: {
+                        _id: { month: { $month: '$createdAt' }, year: { $year: '$createdAt' } },
+                        totalOrders: { $sum: 1 },
+                        totalRevenue: { $sum: '$price' }
+                    }
+                },
+                { $sort: { '_id.year': 1, '_id.month': 1 } }
+            ])
+
+            const monthlySellers = await sellerModel.aggregate([
+                {
+                    $group: {
+                        _id: { month: { $month: '$createdAt' }, year: { $year: '$createdAt' } },
+                        totalSellers: { $sum: 1 }
+                    }
+                },
+                { $sort: { '_id.year': 1, '_id.month': 1 } }
+            ])
+
+            const ordersData = new Array(12).fill(0)
+            const revenueData = new Array(12).fill(0)
+            const sellersData = new Array(12).fill(0)
+
+            monthlyOrders.forEach(item => {
+                const monthIndex = item._id.month - 1
+                ordersData[monthIndex] = item.totalOrders
+                revenueData[monthIndex] = Math.round(item.totalRevenue)
+            })
+
+            monthlySellers.forEach(item => {
+                const monthIndex = item._id.month - 1
+                sellersData[monthIndex] = item.totalSellers
+            })
+
+            responseReturn(res, 200, {
+                monthlyData: {
+                    categories: monthLabels,
+                    orders: ordersData,
+                    revenue: revenueData,
+                    sellers: sellersData
+                }
+            })
+        } catch (error) {
+            console.log('get_admin_monthly_analytics error: ' + error.message)
             responseReturn(res, 500, { message: 'Internal server error' })
         }
     }

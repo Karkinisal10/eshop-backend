@@ -3,6 +3,7 @@ const { responseReturn } = require("../../utiles/response")
 const cloudinary = require('cloudinary').v2
 const productModel = require('../../models/productModel')
 const sellerModel = require('../../models/sellerModel')
+const cardModel = require('../../models/cardModel')
  
 class productController{
 
@@ -94,16 +95,42 @@ class productController{
                 const products = await productModel.find({
                     $text: { $search: searchValue },
                     sellerId: id
-                }).skip(skipPage).limit(parPage).sort({ createdAt: -1})
+                }).skip(skipPage).limit(parPage).sort({ createdAt: -1}).lean()
                 const totalProduct = await productModel.find({
                     $text: { $search: searchValue },
                     sellerId: id
                 }).countDocuments()
-                responseReturn(res, 200,{products,totalProduct})
+                const productIds = products.map(p => p._id)
+                const addToCartAgg = await cardModel.aggregate([
+                    { $match: { productId: { $in: productIds } } },
+                    { $group: { _id: '$productId', totalAdded: { $sum: '$quantity' } } }
+                ])
+                const addToCartMap = addToCartAgg.reduce((acc, item) => {
+                    acc[item._id.toString()] = item.totalAdded
+                    return acc
+                }, {})
+                const productsWithStats = products.map(p => ({
+                    ...p,
+                    addToCartCount: addToCartMap[p._id.toString()] || 0
+                }))
+                responseReturn(res, 200,{products: productsWithStats,totalProduct})
             } else {
-                const products = await productModel.find({ sellerId:id }).skip(skipPage).limit(parPage).sort({ createdAt: -1})
+                const products = await productModel.find({ sellerId:id }).skip(skipPage).limit(parPage).sort({ createdAt: -1}).lean()
             const totalProduct = await productModel.find({ sellerId:id }).countDocuments()
-            responseReturn(res, 200,{products,totalProduct}) 
+            const productIds = products.map(p => p._id)
+            const addToCartAgg = await cardModel.aggregate([
+                { $match: { productId: { $in: productIds } } },
+                { $group: { _id: '$productId', totalAdded: { $sum: '$quantity' } } }
+            ])
+            const addToCartMap = addToCartAgg.reduce((acc, item) => {
+                acc[item._id.toString()] = item.totalAdded
+                return acc
+            }, {})
+            const productsWithStats = products.map(p => ({
+                ...p,
+                addToCartCount: addToCartMap[p._id.toString()] || 0
+            }))
+            responseReturn(res, 200,{products: productsWithStats,totalProduct}) 
             }
             
         } catch (error) {

@@ -6,6 +6,7 @@ const productModel = require('../../models/productModel')
 const authOrder = require('../../models/authOrder')
 const reviewModel = require('../../models/reviewModel')
 const customerOrder = require('../../models/customerOrder')
+const withdrowRequest = require('../../models/withdrowRequest')
 
 class sellerController{ 
 
@@ -233,6 +234,14 @@ class sellerController{
             const avgRating = reviews.length > 0 
                 ? (reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length).toFixed(1)
                 : 0
+
+            // Get total paid to seller (successful withdrawals)
+            const paidAgg = await withdrowRequest.aggregate([
+                { $match: { sellerId: String(sellerId), status: 'success' } },
+                { $group: { _id: null, totalPaid: { $sum: '$amount' }, paymentCount: { $sum: 1 } } }
+            ])
+            const totalPaid = paidAgg.length ? paidAgg[0].totalPaid : 0
+            const paymentCount = paidAgg.length ? paidAgg[0].paymentCount : 0
             
             // Get sales by month (last 6 months)
             const sixMonthsAgo = new Date()
@@ -283,6 +292,10 @@ class sellerController{
                 reviews: {
                     total: reviews.length,
                     avgRating: parseFloat(avgRating)
+                },
+                payments: {
+                    totalPaid,
+                    paymentCount
                 }
             }
 
